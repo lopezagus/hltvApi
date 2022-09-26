@@ -193,7 +193,7 @@ class Parser:
 
     def parse_player_stats(self: Tag) -> tuple:
         """
-        Receives a div class stats-content with child tables containing player stats information. First div is always the
+        Receives a div class stats-content with child tables containing player stats information. First div is the
         global player stats for all maps and has id = 'all-content', next ones are map specific with id = ('id'-content)
         """
         # First three tables are global, ct and t data from first_team, next three are for the second team
@@ -260,4 +260,5 @@ class Parser:
                 "kd": x.find("td", class_="kd").text,
                 "adr": float(x.find("td", class_="adr").text)
             }
+
         return team1_dict, team2_dict

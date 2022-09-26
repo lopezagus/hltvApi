@@ -4,26 +4,149 @@ from collections import deque
 from typing import Union
 
 import requests
-import constants
 import pandas as pd
 import time
+import pickle
 
 
 class HltvApi(scraper.Scraper):
     """
     Main interface to request HLTV data for many matches. Individual statistics can be obtained through the Scraper
-    subclass. Most work is delegated to the subclass while looping and data loading to other sources will be done
-    in this class
+    subclass. Most work is delegated to the subclass while looping, data transformation and  loading to other sources
+    will be done in this class
     """
 
     def __init__(self):
         super().__init__()
+        self.counter = 0
+
+        # Normalized fact tables column names
+        self.match_cols = ["matchid", "bestof", "instance", "eventid", "lan", "date", "team1id", "team2id", "winnerid"]
+        self.map_cols = ["mapid", "matchid", "teamid", "map", "score", "enemy_score", "ct_result", "t_result",
+                         "overtime", "won", "pick"],
+        self.player_cols = ["mapId", "teamid", "matchId", "playerid", "map", "ct_kills", "ct_deaths", "ct_adr",
+                            "t_kills", "t_deaths", "t_adr"]
+
+        # Denormalized DataFrame column names
+        self.df_match_cols = ["match_id", "date", "t1_id", "t1_name", "t2_id", "t2_name", "t1_score", "t2_score",
+                              "winner", "event_id", "event_name", "instance", "best_of", "lan"]
+        self.df_map_cols = ["mapId", "matchId", "t1_id", "t1_name", "t2_id", "t2_name", "map", "t1_result", "t2_result",
+                            "t1_ct_score", "t1_t_score", "t2_ct_score", "t2_t_score", "winner", "overtime", "picked_by"]
+
+    def match_dataframe(self, mdict: Union[dict, list[dict]]) -> pd.DataFrame:
+        """
+        Receives a dict or a list of dictionaries obtained with extract_match_info method and extracts all relevant
+        match data into a single denormalized DataFrame. Differs from process_match because this method includes
+        redundant information in the DataFrame for readability.
+        :param mdict: match dictionaries returned by request_match_info method
+        :type mdict: dict, list[dict]
+        :return: DataFrame with self.match_df columns
+        :rtype: pd.DataFrame
+        """
+        container = []
+
+        def process_dict(mdict: dict) -> list:
+            """
+            This nested function contains the code used to process match information for each dictionary
+            """
+            l = []
+            match = mdict["match_info"]
+            l.append(match["match_id"])
+            l.append(match["date"])
+            l.append(mdict["team1"]["id"])
+            l.append(mdict["team1"]["name"])
+            l.append(mdict["team2"]["id"])
+            l.append(mdict["team2"]["name"])
+            l.append(mdict["team1"]["result"])
+            l.append(mdict["team2"]["result"])
+            l.append(mdict["team1"]["name"] if mdict["team1"]["won"] is True else mdict["team2"]["name"])
+            l.append(match["event_id"])
+            l.append(mdict["event"]["name"])
+            l.append(match["instance"])
+            l.append(match["bestof"])
+            l.append(1 if match["lan"] is True else 0)
+
+            return l
+
+        if isinstance(mdict, list):
+            for m in mdict:
+                container.append(process_dict(m))
+
+        elif isinstance(mdict, dict):
+            container.append(process_dict(mdict))
+
+        return pd.DataFrame(container, columns=self.df_match_cols)
+
+    def maps_dataframe(self, mdict: Union[dict, list[dict]]) -> pd.DataFrame:
+        """
+        Receives a dict or a list of dictionaries obtained with extract_match_info method and extracts all relevant
+        mp results data into a single denormalized DataFrame. Differs from process_results because this method includes
+        redundant information in the DataFrame for readability.
+        :param mdict: match dictionaries returned by request_match_info method
+        :type mdict: dict, list[dict]
+        :return: DataFrame with self.match_df columns
+        :rtype: pd.DataFrame
+        """
+        container = []
+
+        def process_dict(mdict: dict, cont: list) -> None:
+            """
+            This nested function contains the code used to process map information for each dictionary
+            """
+            for key, dct in mdict["map_results"].items():
+                # If a map wasn't played because a team won before, there is a null dictionary
+                print(key, dct)
+                if dct is None or key == "Default":
+                    continue
+
+                else:
+                    cont.append([
+                        dct["mapID"],
+                        mdict["match_info"]["match_id"],
+                        mdict["team1"]["id"],
+                        mdict["team1"]["name"],
+                        mdict["team2"]["id"],
+                        mdict["team2"]["name"],
+                        key,
+                        dct["first_team"]["score"],
+                        dct["second_team"]["score"],
+                        dct["first_team"]["round_results"][0][1],
+                        dct["first_team"]["round_results"][1][1],
+                        dct["second_team"]["round_results"][0][1],
+                        dct["second_team"]["round_results"][1][1],
+                        mdict["team1"]["name"] if dct["first_team"]["won"] is True else mdict["team2"]["name"],
+                        dct["overtime"],
+                        1 if dct["first_team"]["pick"] is True else 2
+                    ])
+
+        if isinstance(mdict, list):
+            for m in mdict:
+                process_dict(m, container)
+
+        elif isinstance(mdict, dict):
+            process_dict(mdict, container)
+            print(container)
+
+        return pd.DataFrame(container, columns=self.df_map_cols)
+
+    def players_dataframe(self, mdict: Union[dict, list[dict]]) -> pd.DataFrame:
+        """
+        Receives a dict or a list of dictionaries obtained with extract_match_info method and extracts all relevant
+        player score statistics data into a single denormalized DataFrame. Differs from process_results because this
+        method includes redundant information in the DataFrame for readability.
+        :param mdict: match dictionaries returned by request_match_info method
+        :type mdict: dict, list[dict]
+        :return: DataFrame with self.match_df columns
+        :rtype: pd.DataFrame
+        """
+        # Implementation pending
+        ...
 
     @abstractmethod
     def process_match(self, mdict: dict) -> list:
         """
-        Takes a dictionary with match information and parses it to normalize data for a match table row
-        :param mdict: dictionary returned by extract_match_info method
+        Takes a dictionary with match information and parses it to normalize data for a match Fact Table row
+        :param mdict: match dictionary returned by request_match_info method
         :type mdict: dict
         :return: list with data extracted from the dictionary
         :rtype: list
@@ -38,8 +161,7 @@ class HltvApi(scraper.Scraper):
         container.append(pd.to_datetime(match["date"]))
         container.append(mdict["team1"]["id"])
         container.append(mdict["team2"]["id"]),
-        container.append((mdict["team1"]["id"] if mdict["team1"]
-                          ["won"] is True else mdict["team2"]["id"]))
+        container.append((mdict["team1"]["id"] if mdict["team1"]["won"] is True else mdict["team2"]["id"]))
 
         return container
 
@@ -47,7 +169,7 @@ class HltvApi(scraper.Scraper):
     def process_results(self, mdict: dict) -> list:
         """
         Takes a dictionary with match information and parses it to normalize data for a map table row
-        :param mdict: dictionary returned by extract_match_info method
+        :param mdict: match dictionary returned by request_match_info method
         :type mdict: dict
         :return: list with data extracted from the dictionary
         :rtype: list
@@ -69,8 +191,8 @@ class HltvApi(scraper.Scraper):
                         key,
                         dct["first_team"]["score"],
                         dct["second_team"]["score"],
-                        dct["first_team"]["round_results"][0][1],
-                        dct["first_team"]["round_results"][1][1],
+                        dct["first_team"]["round_results"][0][1],  # ct round score
+                        dct["first_team"]["round_results"][1][1],  # t round score
                         dct["overtime"],
                         dct["first_team"]["won"],
                         dct["first_team"]["pick"]
@@ -97,10 +219,10 @@ class HltvApi(scraper.Scraper):
             return container
 
     @abstractmethod
-    def process_players(self, mdict: dict, player_container: dict) -> list:
+    def process_players(self, mdict: dict, player_container: dict = None) -> list:
         """
         Takes a dictionary with match information and parses it to normalize data for a player stats table row
-        :param mdict: dictionary returned by extract_match_info method
+        :param mdict: match dictionary returned by request_match_info method
         :type mdict: dict
         :param player_container: container for all player dim information 
         :type player_container: dict
@@ -112,44 +234,47 @@ class HltvApi(scraper.Scraper):
             container = []
             # Extract and prepare player stats info
             for key, dct in mdict["player_stats"].items():
-                # Avoid global stats and get only map specific stats
-                if key == "global_stats":
+                # Global stats contain player dimension table data (id, nick, name, nationality)
+                if key == "global_stats" and isinstance(player_container, dict):
                     for team in mdict["player_stats"]["global_stats"].values():
                         for player in team.keys():
+                            # Verify player is not stored in player dimension already
                             if team[player]["playerID"] not in player_container:
-                                player_container[team[player]["playerID"]] = {
-                                    "playerName": team[player]["playerName"],
-                                    "nationality": team[player]["nationality"]
-                                }
-
-                else:
+                                # Add player row to player dimension
+                                player_container[team[player]["playerID"]] = [
+                                    team[player]["playerName"],
+                                    player,
+                                    team[player]["nationality"]
+                                ]
+                # The rest contain player game statistics (kills, deaths, damage)
+                elif key != "global_stats":
                     for player, stats in dct["first_team"].items():
                         container.append(
                             [mdict["map_results"][key]["mapID"],
+                             mdict["team1"]["id"],
                              mdict["match_info"]["match_id"],
                              stats["playerID"],
-                             mdict["team1"]["id"],
                              key,
-                             stats["ct"]["kd"].split("-")[0],
-                             stats["ct"]["kd"].split("-")[1],
+                             int(stats["ct"]["kd"].split("-")[0]),
+                             int(stats["ct"]["kd"].split("-")[1]),
                              stats["ct"]["adr"],
-                             stats["t"]["kd"].split("-")[0],
-                             stats["t"]["kd"].split("-")[1],
+                             int(stats["t"]["kd"].split("-")[0]),
+                             int(stats["t"]["kd"].split("-")[1]),
                              stats["t"]["adr"],
                              ]
                         )
                     for player, stats in dct["second_team"].items():
                         container.append(
                             [mdict["map_results"][key]["mapID"],
+                             mdict["team2"]["id"],
                              mdict["match_info"]["match_id"],
                              stats["playerID"],
-                             mdict["team2"]["id"],
                              key,
-                             stats["ct"]["kd"].split("-")[0],
-                             stats["ct"]["kd"].split("-")[1],
+                             int(stats["ct"]["kd"].split("-")[0]),
+                             int(stats["ct"]["kd"].split("-")[1]),
                              stats["ct"]["adr"],
-                             stats["t"]["kd"].split("-")[0],
-                             stats["t"]["kd"].split("-")[1],
+                             int(stats["t"]["kd"].split("-")[0]),
+                             int(stats["t"]["kd"].split("-")[1]),
                              stats["t"]["adr"],
                              ]
                         )
@@ -160,9 +285,8 @@ class HltvApi(scraper.Scraper):
     def start_matches_queue(self, matches: Union[list[tuple], deque]) -> list[pd.DataFrame]:
         """
         This method starts a deque object with a list or receives one that contains tuples (matchid, matchlink) and
-        iterates over them to return matches, maps, players, teams and events information in a list of dataframes
-        in the order they are mentioned. For specific statistics, call methods player_queue, map_queue, match_queue, 
-        get_event_info or get_team_info
+        iterates over them to return matches, maps, players, teams and events information in a list of normalized
+        dataframes ready for insertion into the Data Warehouse.
         :param matches: matches container with tuples in format (teamid, matchlink)
         :type matches: list, deque
         :return: list of DataFrames with match, map, player, team and event information
@@ -186,7 +310,7 @@ class HltvApi(scraper.Scraper):
         player_rows = []
 
         # Counter to prevent too many api requests and aggregate time taken
-        sleeping_time = 0
+        sleeping_time = 1
         agg = 0
 
         # Create requests session
@@ -198,13 +322,22 @@ class HltvApi(scraper.Scraper):
             if (sleeping_time % 15) == 0:
                 time.sleep(15)
 
+            # Mechanism to interrupt the loop
+            if self.counter >= 500:
+                with open("pending_matches", "wb") as file:
+                    pickle.dump(match_container, file)
+                with open("failed_matches", "wb") as file:
+                    pickle.dump(failed_extractions, file)
+
+                break
+
             # Extract and request match data while measuring time taken
             current = match_container.pop()
             print("PROCESSING MAP: ", current)
             start = time.time()
 
             try:
-                match = self.extract_match_info(current, session)
+                match = self.request_match_info(current, session)
 
                 # Process team data into container
                 if match["team1"]["id"] not in team_rows:
@@ -235,6 +368,7 @@ class HltvApi(scraper.Scraper):
                 sleeping_time += 1
                 finish = time.time() - start
                 agg += finish
+                self.counter += 1
                 print("PROCCESING TIME: ", finish)
                 print("---" * 10)
 
@@ -249,8 +383,16 @@ class HltvApi(scraper.Scraper):
                 continue
 
         # Return data
-        playerstats_df = pd.DataFrame(player_rows, columns=constants.columns["player_rows"])
-        maps_df = pd.DataFrame(map_rows, columns=constants.columns["map_rows"])
-        match_df = pd.DataFrame(match_rows, columns=constants.columns["match_rows"])
+        playerstats_df = pd.DataFrame(player_rows, columns=self.player_cols)
+        maps_df = pd.DataFrame(map_rows, columns=self.map_cols)
+        match_df = pd.DataFrame(match_rows, columns=self.match_cols)
 
-        return [playerstats_df, maps_df, match_df, event_rows, team_rows, player_dim_rows]
+        return [
+            pd.DataFrame.from_dict(team_rows, orient="index", columns=['teamName']),
+            pd.DataFrame.from_dict(event_rows, orient="index", columns=['eventName']),
+            pd.DataFrame.from_dict(player_dim_rows, orient="index", columns=['playerName', 'playerNick',
+                                                                             'nationality']),
+            match_df,
+            maps_df,
+            playerstats_df
+        ]

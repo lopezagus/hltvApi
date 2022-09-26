@@ -12,20 +12,12 @@ class Scraper:
     """
     This class handles requests and information extraction
     """
+
     def __init__(self):
         self.base = "https://www.hltv.org/"
         self.ranks = "https://www.hltv.org/ranking/teams/"
         self.results = "https://www.hltv.org/results?team="
         self.matches = "https://www.hltv.org/results?"
-
-    def get_event_info(self):
-        pass
-
-    def get_team_info(self):
-        pass
-
-    def get_player_info(self):
-        pass
 
     def get_teamids(self) -> list[str]:
         """
@@ -70,7 +62,7 @@ class Scraper:
 
         soup = BeautifulSoup(html.text, "html.parser")
 
-        # Obtain match links and max number of matches for limit purpouses
+        # Obtain match links and get max matches number listed on hltv to limit requests
         matches = [Parser.parse_match_links(match) for match in soup.find_all("div", class_="result-con")]
         max_matches = int(soup.find("span", class_="pagination-data").text.split()[-1])
 
@@ -78,7 +70,7 @@ class Scraper:
         while max_matches > 100:
             # Create request with offset
             offset += 100
-            offset_url = self.matches + "?offset=" + str(offset)
+            offset_url = self.matches + "offset=" + str(offset)
 
             # If limit is requested, offset should not be more than limit
             if offset >= limit:
@@ -103,6 +95,9 @@ class Scraper:
 
         # Prune the list to return only the amount of matches requested
         try:
+            if limit > max_matches:
+                limit = max_matches
+
             return matches[:limit]
 
         except IndexError:
@@ -118,6 +113,7 @@ class Scraper:
         :return: list with all the links to historical matches results
         :rtype: List[tuple(id, link)]
         """
+        # Check for valid data types
         if isinstance(teamid, int):
             link = self.results + str(teamid)
         elif isinstance(teamid, str):
@@ -181,7 +177,7 @@ class Scraper:
 
         return matches
 
-    def extract_match_info(self, match_id: tuple, session: requests.Session = False) -> dict:
+    def request_match_info(self, match_id: tuple, session: requests.Session = False) -> dict:
         """
         Extracts all relevant match information and puts it into a dictionary for further use
         :param match_id: tuple with (match id number, match link)

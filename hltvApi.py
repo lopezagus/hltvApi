@@ -95,7 +95,6 @@ class HltvApi(scraper.Scraper):
             """
             for key, dct in mdict["map_results"].items():
                 # If a map wasn't played because a team won before, there is a null dictionary
-                print(key, dct)
                 if dct is None or key == "Default":
                     continue
 

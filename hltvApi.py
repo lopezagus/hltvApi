@@ -124,7 +124,6 @@ class HltvApi(scraper.Scraper):
 
         elif isinstance(mdict, dict):
             process_dict(mdict, container)
-            print(container)
 
         return pd.DataFrame(container, columns=self.df_map_cols)
 
